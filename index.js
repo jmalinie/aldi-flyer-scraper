@@ -16,7 +16,20 @@ const s3Client = new S3Client({
   },
 });
 
-// Flyer'ları Aldi sitesinden kazı ve R2'ye yükle
+// Sanity'den storeCode'ları çek
+async function fetchStoreCodes() {
+  const sanityClient = require('@sanity/client')({
+    projectId: process.env.SANITY_PROJECT_ID,
+    dataset: process.env.SANITY_DATASET,
+    token: process.env.SANITY_API_TOKEN,
+    useCdn: false,
+  });
+
+  const stores = await sanityClient.fetch(`*[_type=="store" && defined(storeCode)]{storeCode}`);
+  return stores.map(store => store.storeCode);
+}
+
+// Aldi'den flyerları al ve Cloudflare R2'ye yükle
 async function scrapeAndUpload(storeCode) {
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -37,7 +50,7 @@ async function scrapeAndUpload(storeCode) {
   await page.waitForTimeout(8000);
   await browser.close();
 
-  const endDate = dayjs().add(7, 'day').format('YYYY-MM-DD'); // örnek: flyerlar genelde 7 gün geçerli
+  const endDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
   const uploadPromises = Array.from(imageUrls).map(async url => {
     const res = await fetch(url);
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -57,16 +70,17 @@ async function scrapeAndUpload(storeCode) {
   return Promise.all(uploadPromises);
 }
 
-app.get('/scrape-aldi/:storeCode', async (req, res) => {
+// Cron Job tetikleyici
+app.get('/run-daily-job', async (req, res) => {
   try {
-    const urls = await scrapeAndUpload(req.params.storeCode);
-    res.json({ message: 'Flyers scraped & uploaded', urls });
+    const storeCodes = await fetchStoreCodes();
+    for (const code of storeCodes) {
+      await scrapeAndUpload(code);
+    }
+    res.json({ message: 'Daily scraping completed.' });
   } catch (error) {
-    console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on ${port}`);
-});
+app.listen(port, () => console.log(`Server running on port ${port}`));
