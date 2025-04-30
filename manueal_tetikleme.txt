@@ -1,0 +1,1 @@
+https://aldi-flyer-scraper-production.up.railway.app/trigger-scrape

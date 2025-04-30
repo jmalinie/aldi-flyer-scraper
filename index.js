@@ -8,7 +8,6 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Sanity client setup
 const sanity = sanityClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
@@ -16,7 +15,6 @@ const sanity = sanityClient({
   useCdn: false,
 });
 
-// Cloudflare R2 Setup
 const s3Client = new S3Client({
   region: 'auto',
   endpoint: process.env.CF_R2_ENDPOINT,
@@ -71,22 +69,18 @@ async function scrapeAndUpload(storeCode) {
   return Promise.all(uploadPromises);
 }
 
-app.get('/run-daily-job', async (req, res) => {
-  try {
-    const storeCodes = await fetchStoreCodes();
-    for (const code of storeCodes) {
-      await scrapeAndUpload(code);
-    }
-    res.json({ message: 'Daily scraping job completed successfully!' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+// Günlük çalıştırılacak job fonksiyonu (manüel tetiklemek için kullanılır)
+async function runDailyJob() {
+  const storeCodes = await fetchStoreCodes();
+  for (const code of storeCodes) {
+    await scrapeAndUpload(code);
   }
-});
+}
 
+// Manuel tetikleyici endpoint
 app.get('/trigger-scrape', async (req, res) => {
   try {
-    await runDailyJob();  // scraping işlemini başlat
+    await runDailyJob();
     res.json({ message: 'Scraping işlemi başarıyla tamamlandı.' });
   } catch (error) {
     console.error(error);
