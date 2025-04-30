@@ -2,6 +2,7 @@ const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const dayjs = require('dayjs');
+const { createClient } = require('@sanity/client');
 require('dotenv').config();
 
 const app = express();
@@ -16,20 +17,19 @@ const s3Client = new S3Client({
   },
 });
 
-// Sanity'den storeCode'ları çek
-async function fetchStoreCodes() {
-  const sanityClient = require('@sanity/client')({
-    projectId: process.env.SANITY_PROJECT_ID,
-    dataset: process.env.SANITY_DATASET,
-    token: process.env.SANITY_API_TOKEN,
-    useCdn: false,
-  });
+// Sanity Client doğru kullanım
+const sanityClient = createClient({
+  projectId: process.env.SANITY_PROJECT_ID,
+  dataset: process.env.SANITY_DATASET,
+  token: process.env.SANITY_API_TOKEN,
+  useCdn: false,
+});
 
+async function fetchStoreCodes() {
   const stores = await sanityClient.fetch(`*[_type=="store" && defined(storeCode)]{storeCode}`);
   return stores.map(store => store.storeCode);
 }
 
-// Aldi'den flyerları al ve Cloudflare R2'ye yükle
 async function scrapeAndUpload(storeCode) {
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -70,17 +70,23 @@ async function scrapeAndUpload(storeCode) {
   return Promise.all(uploadPromises);
 }
 
-// Cron Job tetikleyici
 app.get('/run-daily-job', async (req, res) => {
   try {
     const storeCodes = await fetchStoreCodes();
-    for (const code of storeCodes) {
-      await scrapeAndUpload(code);
+    const results = [];
+
+    for (const storeCode of storeCodes) {
+      const urls = await scrapeAndUpload(storeCode);
+      results.push({ storeCode, urls });
     }
-    res.json({ message: 'Daily scraping completed.' });
+
+    res.json({ message: 'Daily scraping job completed', results });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server running on ${port}`);
+});
