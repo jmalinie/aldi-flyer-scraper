@@ -8,13 +8,11 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-const { createClient } = require('@sanity/client');
-
 const sanity = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
-  apiVersion: '2024-04-30', // mutlaka API versiyonu belirt
+  apiVersion: '2024-04-30',
   useCdn: false,
 });
 
