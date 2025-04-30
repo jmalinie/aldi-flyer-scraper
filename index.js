@@ -1,14 +1,15 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const sanityClient = require('@sanity/client');
+const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-const sanity = sanityClient({
+// Sanity client doğru kullanım
+const sanity = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
@@ -24,11 +25,13 @@ const s3Client = new S3Client({
   },
 });
 
+// Store kodlarını al
 async function fetchStoreCodes() {
   const stores = await sanity.fetch('*[_type=="store" && defined(storeCode)]{storeCode}');
   return stores.map(store => store.storeCode);
 }
 
+// Scraping ve yükleme
 async function scrapeAndUpload(storeCode) {
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -66,10 +69,10 @@ async function scrapeAndUpload(storeCode) {
     return `${process.env.CF_R2_PUBLIC_URL}/${key}`;
   });
 
-  return Promise.all(uploadPromises);
+  await Promise.all(uploadPromises);
 }
 
-// Günlük çalıştırılacak job fonksiyonu (manüel tetiklemek için kullanılır)
+// Scraping işlemini arka planda çalıştır (asenkron olarak)
 async function runDailyJob() {
   const storeCodes = await fetchStoreCodes();
   for (const code of storeCodes) {
@@ -77,15 +80,15 @@ async function runDailyJob() {
   }
 }
 
-// Manuel tetikleyici endpoint
-app.get('/trigger-scrape', async (req, res) => {
-  try {
-    await runDailyJob();
-    res.json({ message: 'Scraping işlemi başarıyla tamamlandı.' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
-  }
+// Endpoint (Arkaplanda scraping'i başlat)
+app.get('/trigger-scrape', (req, res) => {
+  runDailyJob().catch(console.error);
+  res.status(202).json({ message: 'Scraping işlemi başlatıldı, arka planda devam ediyor.' });
+});
+
+// Health Check Endpoint
+app.get('/', (req, res) => {
+  res.send('Server is running.');
 });
 
 app.listen(port, '0.0.0.0', () => {
