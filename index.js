@@ -77,7 +77,8 @@ async function runDailyJob() {
   }
 }
 
-// Manuel tetikleyici endpoint (işlemi arka plana atar)
+// Manuel tetikleyici endpoint (işlemi arka plana atar) tamam
+// Manuel tetikleyici endpoint (işlemi arka plana atar) 2
 app.get('/trigger-scrape', (req, res) => {
   setImmediate(async () => {
     try {
@@ -93,4 +94,4 @@ app.get('/trigger-scrape', (req, res) => {
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on port ${port}`);
-});
+}); 
