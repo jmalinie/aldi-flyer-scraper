@@ -112,3 +112,13 @@ app.get('/health', (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${port}`);
 });
+
+async function writeLogToR2(logMessage) {
+  const key = `logs/${new Date().toISOString()}.txt`;
+  await s3Client.send(new PutObjectCommand({
+    Bucket: process.env.CF_R2_BUCKET,
+    Key: key,
+    Body: logMessage,
+    ContentType: 'text/plain',
+  }));
+}
