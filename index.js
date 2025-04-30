@@ -1,19 +1,19 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const sanityClient = require('@sanity/client');
+const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 3000;
 
-const sanity = sanityClient({
+const sanity = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
-  apiVersion: '2023-01-01',
   useCdn: false,
+  apiVersion: '2024-04-30'
 });
 
 const s3Client = new S3Client({
@@ -77,21 +77,15 @@ async function runDailyJob() {
   }
 }
 
-// Manuel tetikleyici endpoint (işlemi arka plana atar) tamam
-// Manuel tetikleyici endpoint (işlemi arka plana atar) 2
-app.get('/trigger-scrape', (req, res) => {
-  setImmediate(async () => {
-    try {
-      await runDailyJob();
-      console.log('Scraping tamamlandı.');
-    } catch (error) {
-      console.error('Hata:', error);
-    }
-  });
-
+// Manuel tetikleyici endpoint
+app.get('/trigger-scrape', async (req, res) => {
+  runDailyJob()
+    .then(() => console.log('Scraping tamamlandı.'))
+    .catch(console.error);
+    
   res.json({ message: 'Scraping işlemi arka planda başlatıldı.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on port ${port}`);
-}); 
+});
