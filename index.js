@@ -1,20 +1,19 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { createClient } = require('@sanity/client');
+const sanityClient = require('@sanity/client');
 const dayjs = require('dayjs');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
 
-// Sanity client doğru kullanım
-const sanity = createClient({
+const sanity = sanityClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
+  apiVersion: '2023-01-01',
   useCdn: false,
-  apiVersion: '2024-04-30' // Bugünün tarihini ya da en son stabil tarih seçebilirsin
 });
 
 const s3Client = new S3Client({
@@ -26,13 +25,11 @@ const s3Client = new S3Client({
   },
 });
 
-// Store kodlarını al
 async function fetchStoreCodes() {
   const stores = await sanity.fetch('*[_type=="store" && defined(storeCode)]{storeCode}');
   return stores.map(store => store.storeCode);
 }
 
-// Scraping ve yükleme
 async function scrapeAndUpload(storeCode) {
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -70,10 +67,9 @@ async function scrapeAndUpload(storeCode) {
     return `${process.env.CF_R2_PUBLIC_URL}/${key}`;
   });
 
-  await Promise.all(uploadPromises);
+  return Promise.all(uploadPromises);
 }
 
-// Scraping işlemini arka planda çalıştır (asenkron olarak)
 async function runDailyJob() {
   const storeCodes = await fetchStoreCodes();
   for (const code of storeCodes) {
@@ -81,15 +77,18 @@ async function runDailyJob() {
   }
 }
 
-// Endpoint (Arkaplanda scraping'i başlat)
+// Manuel tetikleyici endpoint (işlemi arka plana atar)
 app.get('/trigger-scrape', (req, res) => {
-  runDailyJob().catch(console.error);
-  res.status(202).json({ message: 'Scraping işlemi başlatıldı, arka planda devam ediyor.' });
-});
+  setImmediate(async () => {
+    try {
+      await runDailyJob();
+      console.log('Scraping tamamlandı.');
+    } catch (error) {
+      console.error('Hata:', error);
+    }
+  });
 
-// Health Check Endpoint
-app.get('/', (req, res) => {
-  res.send('Server is running.');
+  res.json({ message: 'Scraping işlemi arka planda başlatıldı.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
