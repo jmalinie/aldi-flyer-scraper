@@ -14,6 +14,7 @@ const sanity = createClient({
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
   useCdn: false,
+  apiVersion: '2024-04-30' // Bugünün tarihini ya da en son stabil tarih seçebilirsin
 });
 
 const s3Client = new S3Client({
