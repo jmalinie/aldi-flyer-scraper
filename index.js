@@ -87,6 +87,12 @@ app.get('/run-daily-job', async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on ${port}`);
 });
+=======
+app.listen(port, () => {
+  console.log(`Server running on ${port}`);
+});
+>>>>>>> 6d1fbf74d2b2d119dfc54c58f452c57a32547864
