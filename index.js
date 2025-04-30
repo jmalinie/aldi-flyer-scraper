@@ -1,14 +1,14 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const sanityClient = require('@sanity/client');
+const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-const sanity = sanityClient({
+const sanity = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
   token: process.env.SANITY_API_TOKEN,
@@ -75,13 +75,10 @@ async function scrapeAndUpload(storeCode) {
   });
 
   const results = await Promise.all(uploadPromises);
-
   console.log(`✅ Completed scraping and uploading for store: ${storeCode}`);
-
   return results;
 }
 
-// Günlük çalıştırılacak job fonksiyonu
 async function runDailyJob() {
   console.log(`🔄 Daily scraping job started.`);
   const storeCodes = await fetchStoreCodes();
@@ -95,13 +92,11 @@ async function runDailyJob() {
   console.log(`🎉 Daily scraping job completed.`);
 }
 
-// Manuel tetikleyici endpoint
 app.get('/trigger-scrape', (req, res) => {
-  runDailyJob(); // Arka planda başlatılır
+  runDailyJob(); // Background task
   res.json({ message: 'Scraping job triggered.' });
 });
 
-// Server dinleme
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${port}`);
 });
