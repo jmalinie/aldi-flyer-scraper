@@ -84,6 +84,16 @@ app.get('/run-daily-job', async (req, res) => {
   }
 });
 
+app.get('/trigger-scrape', async (req, res) => {
+  try {
+    await runDailyJob();  // scraping işlemini başlat
+    res.json({ message: 'Scraping işlemi başarıyla tamamlandı.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on port ${port}`);
 });
