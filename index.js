@@ -1,13 +1,22 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const sanityClient = require('@sanity/client');
 const dayjs = require('dayjs');
-const { createClient } = require('@sanity/client');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Sanity client setup
+const sanity = sanityClient({
+  projectId: process.env.SANITY_PROJECT_ID,
+  dataset: process.env.SANITY_DATASET,
+  token: process.env.SANITY_API_TOKEN,
+  useCdn: false,
+});
+
+// Cloudflare R2 Setup
 const s3Client = new S3Client({
   region: 'auto',
   endpoint: process.env.CF_R2_ENDPOINT,
@@ -17,16 +26,8 @@ const s3Client = new S3Client({
   },
 });
 
-// Sanity Client doğru kullanım
-const sanityClient = createClient({
-  projectId: process.env.SANITY_PROJECT_ID,
-  dataset: process.env.SANITY_DATASET,
-  token: process.env.SANITY_API_TOKEN,
-  useCdn: false,
-});
-
 async function fetchStoreCodes() {
-  const stores = await sanityClient.fetch(`*[_type=="store" && defined(storeCode)]{storeCode}`);
+  const stores = await sanity.fetch('*[_type=="store" && defined(storeCode)]{storeCode}');
   return stores.map(store => store.storeCode);
 }
 
@@ -73,26 +74,16 @@ async function scrapeAndUpload(storeCode) {
 app.get('/run-daily-job', async (req, res) => {
   try {
     const storeCodes = await fetchStoreCodes();
-    const results = [];
-
-    for (const storeCode of storeCodes) {
-      const urls = await scrapeAndUpload(storeCode);
-      results.push({ storeCode, urls });
+    for (const code of storeCodes) {
+      await scrapeAndUpload(code);
     }
-
-    res.json({ message: 'Daily scraping job completed', results });
+    res.json({ message: 'Daily scraping job completed successfully!' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
 
-<<<<<<< HEAD
 app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running on ${port}`);
+  console.log(`Server running on port ${port}`);
 });
-=======
-app.listen(port, () => {
-  console.log(`Server running on ${port}`);
-});
->>>>>>> 6d1fbf74d2b2d119dfc54c58f452c57a32547864
