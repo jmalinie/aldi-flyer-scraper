@@ -89,22 +89,28 @@ async function scrapeAndUpload(storeCode) {
 
 async function runDailyJob() {
   const storeCodes = await fetchStoreCodes();
-  const BATCH_SIZE = 20;
+  const BATCH_SIZE = 20; // Her batch toplamda 20 store kodu alacak
+  const CONCURRENT_LIMIT = 5; // Aynı anda maksimum 5 scraping işlemi
 
   for (let i = 0; i < storeCodes.length; i += BATCH_SIZE) {
     const batch = storeCodes.slice(i, i + BATCH_SIZE);
 
-    await Promise.all(batch.map(code =>
-      scrapeAndUpload(code)
-        .then(() => console.log(`🟢 Başarılı: ${code}`))
-        .catch(e => console.error(`🔴 Hata: ${code}`, e))
-    ));
+    for (let j = 0; j < batch.length; j += CONCURRENT_LIMIT) {
+      const concurrentBatch = batch.slice(j, j + CONCURRENT_LIMIT);
+
+      await Promise.all(concurrentBatch.map(code =>
+        scrapeAndUpload(code)
+          .then(() => console.log(`🟢 Başarılı: ${code}`))
+          .catch(e => console.error(`🔴 Hata: ${code}`, e))
+      ));
+    }
 
     console.log(`✅ Batch tamamlandı: ${i + 1}-${Math.min(i + BATCH_SIZE, storeCodes.length)}`);
   }
 
   await writeLogToR2(`🎉 Daily scraping tamamlandı: ${new Date().toISOString()}`);
 }
+
 
 async function writeLogToR2(logMessage) {
   const key = `logs/${new Date().toISOString()}.txt`;
