@@ -116,6 +116,12 @@ async function writeLogToR2(logMessage) {
   }));
 }
 
+// Railway deployment sonrası scraping otomatik başlatılır
+runDailyJob()
+  .then(() => console.log("🔔 İlk çalışma tamamlandı."))
+  .catch(console.error);
+
+// İsterseniz manuel tetiklemek için bu endpoint'i kullanabilirsiniz
 app.get('/trigger-scrape', (req, res) => {
   runDailyJob().catch(console.error);
   res.json({ message: 'Scraping başlatıldı.' });
