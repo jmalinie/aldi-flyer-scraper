@@ -27,7 +27,9 @@ const s3Client = new S3Client({
 
 async function fetchStoreCodes() {
   const stores = await sanity.fetch('*[_type=="store" && defined(storeCode)]{storeCode}');
-  return stores.map(store => store.storeCode);
+  return stores
+    .map(store => store.storeCode)
+    .filter(code => code && code.trim().length > 0); // boş kodları çıkar
 }
 
 async function scrapeAndUpload(storeCode) {
@@ -35,7 +37,10 @@ async function scrapeAndUpload(storeCode) {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--disable-dev-shm-usage', '--no-sandbox'],
+    });
     const page = await browser.newPage();
     const imageUrls = new Set();
 
@@ -52,12 +57,11 @@ async function scrapeAndUpload(storeCode) {
 
     console.log(`🌐 Aldi sitesine gidiliyor: ${storeCode}`);
     await page.goto(`https://aldi.us/weekly-specials/our-weekly-ads/?storeref=${storeCode}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(10000);
+    await page.waitForTimeout(8000); // bekleme süresi optimize edildi
     console.log(`⏳ Aldi sitesinden çıkıldı: ${storeCode}`);
     await browser.close();
 
     const endDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
-
     console.log(`📦 Upload işlemi başlıyor: ${storeCode}, toplam ${imageUrls.size} resim bulundu.`);
 
     const uploadPromises = Array.from(imageUrls).map(async (url) => {
@@ -86,11 +90,10 @@ async function scrapeAndUpload(storeCode) {
   }
 }
 
-
 async function runDailyJob() {
   const storeCodes = await fetchStoreCodes();
-  const BATCH_SIZE = 20; // Her batch toplamda 20 store kodu alacak
-  const CONCURRENT_LIMIT = 5; // Aynı anda maksimum 5 scraping işlemi
+  const BATCH_SIZE = 20;
+  const CONCURRENT_LIMIT = 5;
 
   for (let i = 0; i < storeCodes.length; i += BATCH_SIZE) {
     const batch = storeCodes.slice(i, i + BATCH_SIZE);
@@ -111,7 +114,6 @@ async function runDailyJob() {
   await writeLogToR2(`🎉 Daily scraping tamamlandı: ${new Date().toISOString()}`);
 }
 
-
 async function writeLogToR2(logMessage) {
   const key = `logs/${new Date().toISOString()}.txt`;
   await s3Client.send(new PutObjectCommand({
@@ -122,12 +124,6 @@ async function writeLogToR2(logMessage) {
   }));
 }
 
-// Railway deployment sonrası scraping otomatik başlatılır
-runDailyJob()
-  .then(() => console.log("🔔 İlk çalışma tamamlandı."))
-  .catch(console.error);
-
-// İsterseniz manuel tetiklemek için bu endpoint'i kullanabilirsiniz
 app.get('/trigger-scrape', (req, res) => {
   runDailyJob().catch(console.error);
   res.json({ message: 'Scraping başlatıldı.' });
