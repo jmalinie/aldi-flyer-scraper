@@ -1,6 +1,17 @@
-require('dotenv').config({ path: '.env' });
+const { createClient } = require('@sanity/client');
+require('dotenv').config();
 
-console.log("✅ Env dosya testi:");
-console.log("Project ID:", process.env.SANITY_PROJECT_ID);
-console.log("Dataset:", process.env.SANITY_DATASET);
-console.log("R2 Bucket:", process.env.CF_R2_BUCKET);
+const sanity = createClient({
+  projectId: process.env.SANITY_PROJECT_ID,
+  dataset: process.env.SANITY_DATASET,
+  apiVersion: '2024-04-30',
+  token: process.env.SANITY_API_TOKEN,
+  useCdn: false,
+});
+
+async function checkStoreCodes() {
+  const stores = await sanity.fetch('*[_type=="store" && defined(storeCode)]{storeCode}');
+  console.log(`Toplam store kodu sayısı: ${stores.length}`);
+}
+
+checkStoreCodes().catch(console.error);

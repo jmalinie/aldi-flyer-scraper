@@ -5,16 +5,13 @@ const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
 require('dotenv').config({ path: '.env' });
 
-console.log("Sanity Project ID:", process.env.SANITY_PROJECT_ID);
-console.log("Sanity Dataset:", process.env.SANITY_DATASET);
-
 const app = express();
 const port = process.env.PORT || 8080;
 
 const sanity = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET,
-  apiVersion: '2024-04-30', // Sanity için gerekli API versiyonu belirtildi
+  apiVersion: '2024-04-30',
   token: process.env.SANITY_API_TOKEN,
   useCdn: false,
 });
@@ -34,8 +31,6 @@ async function fetchStoreCodes() {
 }
 
 async function scrapeAndUpload(storeCode) {
-  console.log(`✅ Scraping başladı: Store kodu: ${storeCode}`);
-
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const imageUrls = new Set();
@@ -52,7 +47,7 @@ async function scrapeAndUpload(storeCode) {
   });
 
   await page.goto(`https://aldi.us/weekly-specials/our-weekly-ads/?storeref=${storeCode}`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(10000); // 10 saniye bekleme
+  await page.waitForTimeout(10000);
   await browser.close();
 
   const endDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
@@ -69,10 +64,6 @@ async function scrapeAndUpload(storeCode) {
       Body: buffer,
       ContentType: 'image/jpeg',
     }));
-
-    console.log(`🟢 Yüklendi: ${key}`);
-
-    return `${process.env.CF_R2_PUBLIC_URL}/${key}`;
   });
 
   return Promise.all(uploadPromises);
@@ -80,28 +71,22 @@ async function scrapeAndUpload(storeCode) {
 
 async function runDailyJob() {
   const storeCodes = await fetchStoreCodes();
-  for (const code of storeCodes) {
-    try {
-      await scrapeAndUpload(code);
-    } catch (error) {
-      console.error(`❌ Store kodu hata: ${code}`, error);
-    }
+  const BATCH_SIZE = 20;
+
+  for (let i = 0; i < storeCodes.length; i += BATCH_SIZE) {
+    const batch = storeCodes.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(batch.map(code =>
+      scrapeAndUpload(code)
+        .then(() => console.log(`🟢 Başarılı: ${code}`))
+        .catch(e => console.error(`🔴 Hata: ${code}`, e))
+    ));
+
+    console.log(`✅ Batch tamamlandı: ${i + 1}-${Math.min(i + BATCH_SIZE, storeCodes.length)}`);
   }
-  console.log('🎉 Daily scraping tamamlandı.');
+
+  await writeLogToR2(`🎉 Daily scraping tamamlandı: ${new Date().toISOString()}`);
 }
-
-// HTTP Endpoint'i (tetikleme için)
-app.get('/trigger-scrape', (req, res) => {
-  runDailyJob().catch(console.error);
-  res.json({ message: 'Scraping başlatıldı.' });
-});
-
-// Ana giriş noktası (Railway cron için idealdir)
-runDailyJob().catch(console.error);
-
-app.listen(port, '0.0.0.0', () => {
-  console.log(`🌐 Server ${port} portunda çalışıyor.`);
-});
 
 async function writeLogToR2(logMessage) {
   const key = `logs/${new Date().toISOString()}.txt`;
@@ -112,3 +97,12 @@ async function writeLogToR2(logMessage) {
     ContentType: 'text/plain',
   }));
 }
+
+app.get('/trigger-scrape', (req, res) => {
+  runDailyJob().catch(console.error);
+  res.json({ message: 'Scraping başlatıldı.' });
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`🌐 Server ${port} portunda çalışıyor.`);
+});
