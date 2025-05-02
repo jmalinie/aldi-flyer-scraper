@@ -132,3 +132,4 @@ app.get('/trigger-scrape', (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`🌐 Server ${port} portunda çalışıyor.`);
 });
+//yorum satırı
