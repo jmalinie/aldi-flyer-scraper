@@ -1,6 +1,6 @@
 const express = require('express');
 const { chromium } = require('playwright');
-const { S3Client, PutObjectCommand, GetObjectCommand, PutObjectAclCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
 const streamToString = require('stream-to-string');
@@ -90,7 +90,7 @@ async function getCurrentIndex() {
     const indexStr = await streamToString(response.Body);
     return parseInt(indexStr, 10);
   } catch (error) {
-    return 0; // İlk defa çalıştırılıyorsa 0 döndür
+    return 0;
   }
 }
 
@@ -112,47 +112,35 @@ async function runBatchScraping(batch, batchNumber) {
 }
 
 async function runDailyJob() {
-  try {
-    const storeCodes = await fetchStoreCodes();
-    const BATCH_SIZE = 10;
-    const MAX_STORES_PER_RUN = 100;
+  const storeCodes = await fetchStoreCodes();
+  const BATCH_SIZE = 10;
+  const MAX_STORES_PER_RUN = 100;
 
-    let currentIndex = await getCurrentIndex();
+  let currentIndex = await getCurrentIndex();
 
-    let processedCount = 0;
-    while (currentIndex < storeCodes.length && processedCount < MAX_STORES_PER_RUN) {
-      const batch = storeCodes.slice(currentIndex, currentIndex + BATCH_SIZE);
-      await runBatchScraping(batch, (currentIndex / BATCH_SIZE) + 1);
+  let processedCount = 0;
+  while (currentIndex < storeCodes.length && processedCount < MAX_STORES_PER_RUN) {
+    const batch = storeCodes.slice(currentIndex, currentIndex + BATCH_SIZE);
+    await runBatchScraping(batch, (currentIndex / BATCH_SIZE) + 1);
 
-      currentIndex += BATCH_SIZE;
-      processedCount += BATCH_SIZE;
+    currentIndex += BATCH_SIZE;
+    processedCount += BATCH_SIZE;
 
-      await saveCurrentIndex(currentIndex);
-    }
-
-    if (currentIndex >= storeCodes.length) {
-      await saveCurrentIndex(0); // Tüm storelar tamamlandı, tekrar başa dön
-    }
-
-    console.log('🎉 Cron job scraping işlemi tamamlandı.');
-    process.exit(0);
-
-  } catch (error) {
-    console.error('🔴 Cron job scraping işleminde hata:', error);
-    process.exit(1);
+    await saveCurrentIndex(currentIndex);
   }
+
+  if (currentIndex >= storeCodes.length) {
+    await saveCurrentIndex(0);
+  }
+
+  console.log('🎉 Cron job scraping işlemi tamamlandı.');
 }
 
-app.get('/trigger-scrape', async (req, res) => {
-  await runDailyJob();
-  res.json({ message: 'Scraping başarıyla tamamlandı veya batch limiti doldu.' });
+app.get('/trigger-scrape', (req, res) => {
+  runDailyJob();
+  res.json({ message: 'Scraping başlatıldı.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`🌐 Server ${port} portunda çalışıyor.`);
 });
-
-if (require.main === module) {
-  runDailyJob();
-}
-// comment
