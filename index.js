@@ -1,8 +1,9 @@
 const express = require('express');
 const { chromium } = require('playwright');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, PutObjectAclCommand } = require('@aws-sdk/client-s3');
 const { createClient } = require('@sanity/client');
 const dayjs = require('dayjs');
+const streamToString = require('stream-to-string');
 require('dotenv').config({ path: '.env' });
 
 const app = express();
@@ -80,6 +81,28 @@ async function scrapeAndUpload(storeCode) {
   }
 }
 
+async function getCurrentIndex() {
+  try {
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.CF_R2_BUCKET,
+      Key: 'state/currentIndex.txt',
+    }));
+    const indexStr = await streamToString(response.Body);
+    return parseInt(indexStr, 10);
+  } catch (error) {
+    return 0; // İlk defa çalıştırılıyorsa 0 döndür
+  }
+}
+
+async function saveCurrentIndex(index) {
+  await s3Client.send(new PutObjectCommand({
+    Bucket: process.env.CF_R2_BUCKET,
+    Key: 'state/currentIndex.txt',
+    Body: index.toString(),
+    ContentType: 'text/plain',
+  }));
+}
+
 async function runBatchScraping(batch, batchNumber) {
   console.log(`🚀 Batch başladı: #${batchNumber}`);
   for (const storeCode of batch) {
@@ -88,29 +111,47 @@ async function runBatchScraping(batch, batchNumber) {
   console.log(`🏁 Batch tamamlandı: #${batchNumber}`);
 }
 
-app.get('/trigger-scrape', async (req, res) => {
+async function runDailyJob() {
   try {
     const storeCodes = await fetchStoreCodes();
     const BATCH_SIZE = 10;
+    const MAX_STORES_PER_RUN = 100;
 
-    for (let i = 0, batchNumber = 1; i < storeCodes.length; i += BATCH_SIZE, batchNumber++) {
-      const batch = storeCodes.slice(i, i + BATCH_SIZE);
-      await runBatchScraping(batch, batchNumber);
+    let currentIndex = await getCurrentIndex();
 
-      if ((batchNumber % 10) === 0) {
-        console.log("🔄 100 store scrape edildi, sonraki batch için yeniden başlat.");
-        break; // Railway cron otomatik yeniden başlatsın diye döngüyü durdur
-      }
+    let processedCount = 0;
+    while (currentIndex < storeCodes.length && processedCount < MAX_STORES_PER_RUN) {
+      const batch = storeCodes.slice(currentIndex, currentIndex + BATCH_SIZE);
+      await runBatchScraping(batch, (currentIndex / BATCH_SIZE) + 1);
+
+      currentIndex += BATCH_SIZE;
+      processedCount += BATCH_SIZE;
+
+      await saveCurrentIndex(currentIndex);
     }
 
-    res.json({ message: 'Scraping başarıyla tamamlandı veya batch limiti doldu.' });
+    if (currentIndex >= storeCodes.length) {
+      await saveCurrentIndex(0); // Tüm storelar tamamlandı, tekrar başa dön
+    }
+
+    console.log('🎉 Cron job scraping işlemi tamamlandı.');
+    process.exit(0);
 
   } catch (error) {
-    console.error('Genel hata:', error);
-    res.status(500).json({ error: error.message });
+    console.error('🔴 Cron job scraping işleminde hata:', error);
+    process.exit(1);
   }
+}
+
+app.get('/trigger-scrape', async (req, res) => {
+  await runDailyJob();
+  res.json({ message: 'Scraping başarıyla tamamlandı veya batch limiti doldu.' });
 });
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`🌐 Server ${port} portunda çalışıyor.`);
 });
+
+if (require.main === module) {
+  runDailyJob();
+}
