@@ -1,10 +1,9 @@
-const express = require('express');
-const { chromium } = require('playwright');
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const fetch = require('node-fetch');
-const readline = require('readline');
-const { Readable } = require('stream');
-require('dotenv').config({ path: '.env' });
+import express from 'express';
+import { chromium } from 'playwright';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' });
 
 const app = express();
 const port = process.env.PORT || 8080;
