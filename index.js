@@ -1,6 +1,11 @@
 import express from 'express';
 import { chromium } from 'playwright';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command
+} from '@aws-sdk/client-s3';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env' });
@@ -73,39 +78,81 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
       route.continue();
     });
 
-    await page.goto(flyerUrl, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(5000);
+    try {
+      await page.goto(flyerUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(5000);
+    } catch (gotoError) {
+      console.error(`❌ GOTO hatası: ${flyerUrl}`, gotoError);
+      await browser.close();
+      throw gotoError;
+    }
+
     await browser.close();
 
     for (const url of imageUrls) {
-      const imgRes = await fetch(url);
-      const buffer = Buffer.from(await imgRes.arrayBuffer());
-      const fileName = url.split('/').pop();
+      try {
+        const imgRes = await fetch(url);
+        const buffer = Buffer.from(await imgRes.arrayBuffer());
+        const fileName = url.split('/').pop();
 
-      const key = `${fullPrefix}/${fileName}`;
-      await s3Client.send(new PutObjectCommand({
-        Bucket: process.env.CF_R2_BUCKET,
-        Key: key,
-        Body: buffer,
-        ContentType: 'image/jpeg',
-      }));
+        const key = `${fullPrefix}/${fileName}`;
+        await s3Client.send(new PutObjectCommand({
+          Bucket: process.env.CF_R2_BUCKET,
+          Key: key,
+          Body: buffer,
+          ContentType: 'image/jpeg',
+        }));
 
-      console.log(`🟢 Yüklendi: ${key}`);
+        console.log(`🟢 Yüklendi: ${key}`);
+      } catch (uploadError) {
+        console.error(`🚫 Yükleme hatası: ${url}`, uploadError);
+      }
     }
+
   } catch (err) {
-    console.error(`❌ Hata: ${flyerUrl}`, err);
+    console.error(`❌ Genel hata: ${flyerUrl}`, err);
     if (browser) await browser.close();
+    throw err;
+  }
+}
+
+// Retry destekli sürüm
+async function scrapeWithRetry(url, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`🔁 ${attempt}. deneme: ${url}`);
+      await scrapeAndUploadFromUrl(url);
+      return true;
+    } catch (err) {
+      console.log(`⛔ ${attempt}. deneme başarısız: ${url}`);
+      if (attempt === maxAttempts) return false;
+    }
   }
 }
 
 app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
+  const failed = [];
 
   for (const link of links) {
-    await scrapeAndUploadFromUrl(link);
+    const success = await scrapeWithRetry(link);
+    if (!success) failed.push(link);
   }
 
-  res.json({ status: 'Tüm linkler işlendi.' });
+  if (failed.length > 0) {
+    console.log(`🚨 İlk turda başarısız olan ${failed.length} link yeniden deneniyor...`);
+
+    const stillFailed = [];
+    for (const link of failed) {
+      const retrySuccess = await scrapeWithRetry(link, 3);
+      if (!retrySuccess) stillFailed.push(link);
+    }
+
+    console.log(`❌ Hâlâ başarısız olan ${stillFailed.length} link:`);
+    stillFailed.forEach(l => console.log(`- ${l}`));
+  }
+
+  res.json({ status: 'İşlem tamamlandı.' });
 });
 
 app.listen(port, () => {
