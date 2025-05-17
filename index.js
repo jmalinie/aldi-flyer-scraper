@@ -1,21 +1,13 @@
 const express = require('express');
 const { chromium } = require('playwright');
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { createClient } = require('@sanity/client');
-const dayjs = require('dayjs');
-const streamToString = require('stream-to-string');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const fetch = require('node-fetch');
+const readline = require('readline');
+const { Readable } = require('stream');
 require('dotenv').config({ path: '.env' });
 
 const app = express();
 const port = process.env.PORT || 8080;
-
-const sanity = createClient({
-  projectId: process.env.SANITY_PROJECT_ID,
-  dataset: process.env.SANITY_DATASET,
-  apiVersion: '2024-05-02',
-  token: process.env.SANITY_API_TOKEN,
-  useCdn: false,
-});
 
 const s3Client = new S3Client({
   region: 'auto',
@@ -26,24 +18,55 @@ const s3Client = new S3Client({
   },
 });
 
-async function fetchStoreCodes() {
-  const stores = await sanity.fetch('*[_type=="store" && defined(storeCode) && storeCode != ""]{storeCode}');
-  return stores.map(store => store.storeCode);
+async function fetchLinks() {
+  const res = await fetch(process.env.ALDI_LINKS_URL);
+  const text = await res.text();
+  return text.split('\n').map(x => x.trim()).filter(Boolean);
 }
 
-async function scrapeAndUpload(storeCode) {
-  console.log(`✅ Scraping başladı: ${storeCode}`);
+function extractFilenameFromUrl(url) {
+  const urlObj = new URL(url);
+  const lat = urlObj.searchParams.get('latitude');
+  const lon = urlObj.searchParams.get('longitude');
+  return `latitude=${lat}&longitude=${lon}`;
+}
+
+async function deletePreviousImages(folderPrefix) {
+  const listParams = {
+    Bucket: process.env.CF_R2_BUCKET,
+    Prefix: `aldi/${folderPrefix}/`,
+  };
+
+  const { Contents } = await s3Client.send(new ListObjectsV2Command(listParams));
+  if (Contents && Contents.length > 0) {
+    for (const obj of Contents) {
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: process.env.CF_R2_BUCKET,
+        Key: obj.Key,
+      }));
+      console.log(`🗑️ Silindi: ${obj.Key}`);
+    }
+  }
+}
+
+async function scrapeAndUploadFromUrl(flyerUrl) {
+  const folderName = extractFilenameFromUrl(flyerUrl);
+  const fullPrefix = `aldi/${folderName}`;
+
+  console.log(`\n📍 ${flyerUrl}`);
+  console.log(`🧹 ${fullPrefix} içeriği siliniyor...`);
+  await deletePreviousImages(folderName);
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
     const page = await browser.newPage();
     const imageUrls = new Set();
 
     await page.route('**/*', (route) => {
-      const request = route.request();
-      if (request.resourceType() === 'image') {
-        const imgUrl = request.url();
+      const req = route.request();
+      if (req.resourceType() === 'image') {
+        const imgUrl = req.url();
         if (imgUrl.includes('akimages.shoplocal.com') && imgUrl.includes('1200.0.90.0') && !imgUrl.includes('HB')) {
           imageUrls.add(imgUrl);
         }
@@ -51,18 +74,16 @@ async function scrapeAndUpload(storeCode) {
       route.continue();
     });
 
-    await page.goto(`https://aldi.us/weekly-specials/our-weekly-ads/?storeref=${storeCode}`, { waitUntil: 'networkidle' });
+    await page.goto(flyerUrl, { waitUntil: 'networkidle' });
     await page.waitForTimeout(5000);
     await browser.close();
 
-    const endDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
-
-    await Promise.all(Array.from(imageUrls).map(async (url) => {
-      const res = await fetch(url);
-      const buffer = Buffer.from(await res.arrayBuffer());
+    for (const url of imageUrls) {
+      const imgRes = await fetch(url);
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
       const fileName = url.split('/').pop();
-      const key = `aldi/${storeCode}/${endDate}/${fileName}`;
 
+      const key = `${fullPrefix}/${fileName}`;
       await s3Client.send(new PutObjectCommand({
         Bucket: process.env.CF_R2_BUCKET,
         Key: key,
@@ -71,76 +92,23 @@ async function scrapeAndUpload(storeCode) {
       }));
 
       console.log(`🟢 Yüklendi: ${key}`);
-    }));
-
-    console.log(`🎉 İşlem tamamlandı: ${storeCode}`);
-
-  } catch (error) {
-    console.error(`❌ Hata oluştu: ${storeCode}`, error);
+    }
+  } catch (err) {
+    console.error(`❌ Hata: ${flyerUrl}`, err);
     if (browser) await browser.close();
   }
 }
 
-async function getCurrentIndex() {
-  try {
-    const response = await s3Client.send(new GetObjectCommand({
-      Bucket: process.env.CF_R2_BUCKET,
-      Key: 'state/currentIndex.txt',
-    }));
-    const indexStr = await streamToString(response.Body);
-    return parseInt(indexStr, 10);
-  } catch (error) {
-    return 0;
-  }
-}
+app.get('/trigger-scrape', async (req, res) => {
+  const links = await fetchLinks();
 
-async function saveCurrentIndex(index) {
-  await s3Client.send(new PutObjectCommand({
-    Bucket: process.env.CF_R2_BUCKET,
-    Key: 'state/currentIndex.txt',
-    Body: index.toString(),
-    ContentType: 'text/plain',
-  }));
-}
-
-async function runBatchScraping(batch, batchNumber) {
-  console.log(`🚀 Batch başladı: #${batchNumber}`);
-  for (const storeCode of batch) {
-    await scrapeAndUpload(storeCode);
-  }
-  console.log(`🏁 Batch tamamlandı: #${batchNumber}`);
-}
-
-async function runDailyJob() {
-  const storeCodes = await fetchStoreCodes();
-  const BATCH_SIZE = 10;
-  const MAX_STORES_PER_RUN = 100;
-
-  let currentIndex = await getCurrentIndex();
-
-  let processedCount = 0;
-  while (currentIndex < storeCodes.length && processedCount < MAX_STORES_PER_RUN) {
-    const batch = storeCodes.slice(currentIndex, currentIndex + BATCH_SIZE);
-    await runBatchScraping(batch, (currentIndex / BATCH_SIZE) + 1);
-
-    currentIndex += BATCH_SIZE;
-    processedCount += BATCH_SIZE;
-
-    await saveCurrentIndex(currentIndex);
+  for (const link of links) {
+    await scrapeAndUploadFromUrl(link);
   }
 
-  if (currentIndex >= storeCodes.length) {
-    await saveCurrentIndex(0);
-  }
-
-  console.log('🎉 Cron job scraping işlemi tamamlandı.');
-}
-
-app.get('/trigger-scrape', (req, res) => {
-  runDailyJob();
-  res.json({ message: 'Scraping başlatıldı.' });
+  res.json({ status: 'Tüm linkler işlendi.' });
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`🌐 Server ${port} portunda çalışıyor.`);
+app.listen(port, () => {
+  console.log(`🚀 Server ${port} portunda çalışıyor`);
 });
