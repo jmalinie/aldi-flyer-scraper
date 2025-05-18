@@ -83,10 +83,10 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
     await Promise.race([
       page.goto(flyerUrl, { waitUntil: 'domcontentloaded' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 75000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 120000))
     ]);
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(8000);
   } catch (err) {
     console.error(`❌ Sayfa hatası: ${flyerUrl}`, err);
     throw err;
@@ -140,7 +140,7 @@ async function scrapeWithRetry(url, maxAttempts = 3) {
     try {
       console.log(`🔁 ${attempt}. deneme: ${url}`);
       await scrapeAndUploadFromUrl(url);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1500));
       return true;
     } catch (err) {
       console.log(`⛔ ${attempt}. deneme başarısız: ${url}`);
@@ -153,18 +153,18 @@ app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
   const retryQueue = [];
-  const limit = pLimit(2); // DÜŞÜRÜLDÜ: aynı anda max 2 işlem
+  const limit = pLimit(2);
 
   console.time('Tüm işlem süresi');
 
   const tasks = links.map((link, index) =>
     limit(async () => {
-      const success = await scrapeWithRetry(link, 1); // ilk sefer sadece 1 deneme
+      const success = await scrapeWithRetry(link, 1);
       if (!success) retryQueue.push(link);
 
       if (index > 0 && index % 10 === 0) {
         console.log(`⏳ ${index}. link sonrası dinlenme`);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1500));
       }
     })
   );
@@ -179,7 +179,7 @@ app.get('/trigger-scrape', async (req, res) => {
         if (!retrySuccess) console.log(`❌ Yeniden de başarısız: ${link}`);
         if (idx > 0 && idx % 10 === 0) {
           console.log(`⏳ Retry içinde kısa dinlenme`);
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 1500));
         }
       })
     );
