@@ -83,10 +83,10 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
     await Promise.race([
       page.goto(flyerUrl, { waitUntil: 'domcontentloaded' }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 120000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 180000))
     ]);
 
-    await page.waitForTimeout(8000);
+    await page.waitForTimeout(10000);
   } catch (err) {
     console.error(`❌ Sayfa hatası: ${flyerUrl}`, err);
     throw err;
@@ -140,7 +140,7 @@ async function scrapeWithRetry(url, maxAttempts = 3) {
     try {
       console.log(`🔁 ${attempt}. deneme: ${url}`);
       await scrapeAndUploadFromUrl(url);
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 2000));
       return true;
     } catch (err) {
       console.log(`⛔ ${attempt}. deneme başarısız: ${url}`);
@@ -153,7 +153,7 @@ app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
   const retryQueue = [];
-  const limit = pLimit(2);
+  const limit = pLimit(1);
 
   console.time('Tüm işlem süresi');
 
@@ -164,7 +164,7 @@ app.get('/trigger-scrape', async (req, res) => {
 
       if (index > 0 && index % 10 === 0) {
         console.log(`⏳ ${index}. link sonrası dinlenme`);
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 3000));
       }
     })
   );
@@ -179,7 +179,7 @@ app.get('/trigger-scrape', async (req, res) => {
         if (!retrySuccess) console.log(`❌ Yeniden de başarısız: ${link}`);
         if (idx > 0 && idx % 10 === 0) {
           console.log(`⏳ Retry içinde kısa dinlenme`);
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 3000));
         }
       })
     );
