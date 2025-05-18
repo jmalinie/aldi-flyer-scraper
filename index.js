@@ -8,6 +8,7 @@ import {
 } from '@aws-sdk/client-s3';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import pLimit from 'p-limit';
 dotenv.config({ path: '.env' });
 
 const app = express();
@@ -143,30 +144,33 @@ async function scrapeWithRetry(url, maxAttempts = 3) {
 app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
+  const limit = pLimit(6); // aynı anda max 6 görev
 
   console.time('Tüm işlem süresi');
 
-  for (let i = 0; i < links.length; i++) {
-    const link = links[i];
-    const success = await scrapeWithRetry(link);
-    if (!success) failed.push(link);
+  const tasks = links.map((link, index) =>
+    limit(async () => {
+      const success = await scrapeWithRetry(link);
+      if (!success) failed.push(link);
 
-    if (i > 0 && i % 10 === 0) {
-      console.log(`⏳ 10 işlem sonrası dinlenme...`);
-      await new Promise(r => setTimeout(r, 5000));
-    }
-  }
+      if (index > 0 && index % 10 === 0) {
+        console.log(`⏳ ${index}. link sonrası dinlenme`);
+        await new Promise(r => setTimeout(r, 500));
+      }
+    })
+  );
+
+  await Promise.allSettled(tasks);
 
   if (failed.length > 0) {
-    console.log(`🚨 Başarısız linkler yeniden deneniyor...`);
-    const stillFailed = [];
-    for (const link of failed) {
-      const retrySuccess = await scrapeWithRetry(link, 2);
-      if (!retrySuccess) stillFailed.push(link);
-    }
-
-    console.log(`❌ Hâlâ başarısız olan ${stillFailed.length} link:`);
-    stillFailed.forEach(l => console.log(`- ${l}`));
+    console.log(`🚨 Yeniden denenen başarısız linkler...`);
+    const retryTasks = failed.map(link =>
+      limit(async () => {
+        const retrySuccess = await scrapeWithRetry(link, 2);
+        if (!retrySuccess) console.log(`❌ Yeniden de başarısız: ${link}`);
+      })
+    );
+    await Promise.allSettled(retryTasks);
   }
 
   console.timeEnd('Tüm işlem süresi');
