@@ -72,59 +72,57 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
       route.continue();
     });
 
-    try {
-      await page.goto(flyerUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await page.waitForTimeout(5000);
-    } catch (gotoError) {
-      console.error(`❌ GOTO hatası: ${flyerUrl}`, gotoError);
-      throw gotoError;
-    } finally {
-      if (browser) await browser.close();
-    }
+    await Promise.race([
+      page.goto(flyerUrl, { waitUntil: 'domcontentloaded' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 75000))
+    ]);
 
-    const uploadedFiles = new Set();
-
-    for (const url of imageUrls) {
-      try {
-        const fileName = url.split('/').pop();
-        uploadedFiles.add(fileName);
-
-        const imgRes = await fetch(url);
-        const buffer = Buffer.from(await imgRes.arrayBuffer());
-
-        if (existingFiles.has(fileName) && existingFiles.get(fileName) === buffer.length) {
-          console.log(`⏭️ Atlandı (değişmedi): ${fileName}`);
-          continue;
-        }
-
-        const key = `${fullPrefix}/${fileName}`;
-        await s3Client.send(new PutObjectCommand({
-          Bucket: process.env.CF_R2_BUCKET,
-          Key: key,
-          Body: buffer,
-          ContentType: 'image/jpeg',
-        }));
-
-        console.log(`🟢 Yüklendi: ${key}`);
-      } catch (uploadError) {
-        console.error(`🚫 Yükleme hatası: ${url}`, uploadError);
-      }
-    }
-
-    for (const [fileName] of existingFiles) {
-      if (!uploadedFiles.has(fileName)) {
-        const deleteKey = `${fullPrefix}/${fileName}`;
-        await s3Client.send(new DeleteObjectCommand({
-          Bucket: process.env.CF_R2_BUCKET,
-          Key: deleteKey
-        }));
-        console.log(`🗑️ Silindi (artık yok): ${deleteKey}`);
-      }
-    }
-
+    await page.waitForTimeout(3000);
   } catch (err) {
-    console.error(`❌ Genel hata: ${flyerUrl}`, err);
+    console.error(`❌ Sayfa hatası: ${flyerUrl}`, err);
     throw err;
+  } finally {
+    if (browser) await browser.close();
+  }
+
+  const uploadedFiles = new Set();
+
+  for (const url of imageUrls) {
+    try {
+      const fileName = url.split('/').pop();
+      uploadedFiles.add(fileName);
+
+      const imgRes = await fetch(url);
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+
+      if (existingFiles.has(fileName) && existingFiles.get(fileName) === buffer.length) {
+        console.log(`⏭️ Atlandı (değişmedi): ${fileName}`);
+        continue;
+      }
+
+      const key = `${fullPrefix}/${fileName}`;
+      await s3Client.send(new PutObjectCommand({
+        Bucket: process.env.CF_R2_BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: 'image/jpeg',
+      }));
+
+      console.log(`🟢 Yüklendi: ${key}`);
+    } catch (uploadError) {
+      console.error(`🚫 Yükleme hatası: ${url}`, uploadError);
+    }
+  }
+
+  for (const [fileName] of existingFiles) {
+    if (!uploadedFiles.has(fileName)) {
+      const deleteKey = `${fullPrefix}/${fileName}`;
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: process.env.CF_R2_BUCKET,
+        Key: deleteKey
+      }));
+      console.log(`🗑️ Silindi (artık yok): ${deleteKey}`);
+    }
   }
 }
 
@@ -133,7 +131,7 @@ async function scrapeWithRetry(url, maxAttempts = 3) {
     try {
       console.log(`🔁 ${attempt}. deneme: ${url}`);
       await scrapeAndUploadFromUrl(url);
-      await new Promise(r => setTimeout(r, 1000)); // küçük ara
+      await new Promise(r => setTimeout(r, 1000));
       return true;
     } catch (err) {
       console.log(`⛔ ${attempt}. deneme başarısız: ${url}`);
@@ -146,29 +144,32 @@ app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
 
+  console.time('Tüm işlem süresi');
+
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
     const success = await scrapeWithRetry(link);
     if (!success) failed.push(link);
 
-    // Her 10 bağlantıdan sonra kısa ara ver
     if (i > 0 && i % 10 === 0) {
-      console.log(`⏳ Kısa dinlenme...`);
+      console.log(`⏳ 10 işlem sonrası dinlenme...`);
       await new Promise(r => setTimeout(r, 5000));
     }
   }
 
   if (failed.length > 0) {
-    console.log(`🚨 İlk turda başarısız olan ${failed.length} link yeniden deneniyor...`);
+    console.log(`🚨 Başarısız linkler yeniden deneniyor...`);
     const stillFailed = [];
     for (const link of failed) {
       const retrySuccess = await scrapeWithRetry(link, 2);
       if (!retrySuccess) stillFailed.push(link);
     }
+
     console.log(`❌ Hâlâ başarısız olan ${stillFailed.length} link:`);
     stillFailed.forEach(l => console.log(`- ${l}`));
   }
 
+  console.timeEnd('Tüm işlem süresi');
   res.json({ status: 'İşlem tamamlandı.' });
 });
 
