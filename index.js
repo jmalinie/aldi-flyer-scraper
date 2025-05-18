@@ -55,7 +55,15 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--single-process',
+        '--disable-gpu'
+      ]
+    });
     const page = await browser.newPage();
     const imageUrls = new Set();
 
@@ -145,7 +153,7 @@ app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
   const retryQueue = [];
-  const limit = pLimit(6);
+  const limit = pLimit(2); // DÜŞÜRÜLDÜ: aynı anda max 2 işlem
 
   console.time('Tüm işlem süresi');
 
