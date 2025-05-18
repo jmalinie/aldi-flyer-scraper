@@ -144,14 +144,15 @@ async function scrapeWithRetry(url, maxAttempts = 3) {
 app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
-  const limit = pLimit(6); // aynı anda max 6 görev
+  const retryQueue = [];
+  const limit = pLimit(6);
 
   console.time('Tüm işlem süresi');
 
   const tasks = links.map((link, index) =>
     limit(async () => {
-      const success = await scrapeWithRetry(link);
-      if (!success) failed.push(link);
+      const success = await scrapeWithRetry(link, 1); // ilk sefer sadece 1 deneme
+      if (!success) retryQueue.push(link);
 
       if (index > 0 && index % 10 === 0) {
         console.log(`⏳ ${index}. link sonrası dinlenme`);
@@ -162,12 +163,16 @@ app.get('/trigger-scrape', async (req, res) => {
 
   await Promise.allSettled(tasks);
 
-  if (failed.length > 0) {
-    console.log(`🚨 Yeniden denenen başarısız linkler...`);
-    const retryTasks = failed.map(link =>
+  if (retryQueue.length > 0) {
+    console.log(`🚨 İlk turdan kalan başarısız linkler yeniden deneniyor...`);
+    const retryTasks = retryQueue.map((link, idx) =>
       limit(async () => {
         const retrySuccess = await scrapeWithRetry(link, 2);
         if (!retrySuccess) console.log(`❌ Yeniden de başarısız: ${link}`);
+        if (idx > 0 && idx % 10 === 0) {
+          console.log(`⏳ Retry içinde kısa dinlenme`);
+          await new Promise(r => setTimeout(r, 500));
+        }
       })
     );
     await Promise.allSettled(retryTasks);
