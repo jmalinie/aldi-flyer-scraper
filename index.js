@@ -41,7 +41,6 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
   console.log(`\n📍 ${flyerUrl}`);
   console.log(`📂 Klasör: ${fullPrefix}`);
 
-  // 1. R2 klasöründeki mevcut dosyaları al
   const existingList = await s3Client.send(new ListObjectsV2Command({
     Bucket: process.env.CF_R2_BUCKET,
     Prefix: `${fullPrefix}/`
@@ -78,11 +77,10 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
       await page.waitForTimeout(5000);
     } catch (gotoError) {
       console.error(`❌ GOTO hatası: ${flyerUrl}`, gotoError);
-      await browser.close();
       throw gotoError;
+    } finally {
+      if (browser) await browser.close();
     }
-
-    await browser.close();
 
     const uploadedFiles = new Set();
 
@@ -94,7 +92,6 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
         const imgRes = await fetch(url);
         const buffer = Buffer.from(await imgRes.arrayBuffer());
 
-        // Aynı dosya zaten varsa ve boyutu da aynıysa tekrar yükleme
         if (existingFiles.has(fileName) && existingFiles.get(fileName) === buffer.length) {
           console.log(`⏭️ Atlandı (değişmedi): ${fileName}`);
           continue;
@@ -114,7 +111,6 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
       }
     }
 
-    // 3. Artık olmayan eski dosyaları sil
     for (const [fileName] of existingFiles) {
       if (!uploadedFiles.has(fileName)) {
         const deleteKey = `${fullPrefix}/${fileName}`;
@@ -128,17 +124,16 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
   } catch (err) {
     console.error(`❌ Genel hata: ${flyerUrl}`, err);
-    if (browser) await browser.close();
     throw err;
   }
 }
 
-// Retry destekli sürüm
 async function scrapeWithRetry(url, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       console.log(`🔁 ${attempt}. deneme: ${url}`);
       await scrapeAndUploadFromUrl(url);
+      await new Promise(r => setTimeout(r, 1000)); // küçük ara
       return true;
     } catch (err) {
       console.log(`⛔ ${attempt}. deneme başarısız: ${url}`);
@@ -151,20 +146,25 @@ app.get('/trigger-scrape', async (req, res) => {
   const links = await fetchLinks();
   const failed = [];
 
-  for (const link of links) {
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
     const success = await scrapeWithRetry(link);
     if (!success) failed.push(link);
+
+    // Her 10 bağlantıdan sonra kısa ara ver
+    if (i > 0 && i % 10 === 0) {
+      console.log(`⏳ Kısa dinlenme...`);
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
 
   if (failed.length > 0) {
     console.log(`🚨 İlk turda başarısız olan ${failed.length} link yeniden deneniyor...`);
-
     const stillFailed = [];
     for (const link of failed) {
-      const retrySuccess = await scrapeWithRetry(link, 3);
+      const retrySuccess = await scrapeWithRetry(link, 2);
       if (!retrySuccess) stillFailed.push(link);
     }
-
     console.log(`❌ Hâlâ başarısız olan ${stillFailed.length} link:`);
     stillFailed.forEach(l => console.log(`- ${l}`));
   }
