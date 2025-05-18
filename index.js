@@ -35,31 +35,23 @@ function extractFilenameFromUrl(url) {
   return `latitude=${lat}&longitude=${lon}`;
 }
 
-async function deletePreviousImages(folderPrefix) {
-  const listParams = {
-    Bucket: process.env.CF_R2_BUCKET,
-    Prefix: `aldi/${folderPrefix}/`,
-  };
-
-  const { Contents } = await s3Client.send(new ListObjectsV2Command(listParams));
-  if (Contents && Contents.length > 0) {
-    for (const obj of Contents) {
-      await s3Client.send(new DeleteObjectCommand({
-        Bucket: process.env.CF_R2_BUCKET,
-        Key: obj.Key,
-      }));
-      console.log(`🗑️ Silindi: ${obj.Key}`);
-    }
-  }
-}
-
 async function scrapeAndUploadFromUrl(flyerUrl) {
   const folderName = extractFilenameFromUrl(flyerUrl);
   const fullPrefix = `aldi/${folderName}`;
-
   console.log(`\n📍 ${flyerUrl}`);
-  console.log(`🧹 ${fullPrefix} içeriği siliniyor...`);
-  await deletePreviousImages(folderName);
+  console.log(`📂 Klasör: ${fullPrefix}`);
+
+  // 1. R2 klasöründeki mevcut dosyaları al
+  const existingList = await s3Client.send(new ListObjectsV2Command({
+    Bucket: process.env.CF_R2_BUCKET,
+    Prefix: `${fullPrefix}/`
+  }));
+
+  const existingFiles = new Map();
+  for (const obj of existingList.Contents || []) {
+    const name = obj.Key.split('/').pop();
+    existingFiles.set(name, obj.Size);
+  }
 
   let browser;
   try {
@@ -69,11 +61,14 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
     await page.route('**/*', (route) => {
       const req = route.request();
-      if (req.resourceType() === 'image') {
-        const imgUrl = req.url();
-        if (imgUrl.includes('akimages.shoplocal.com') && imgUrl.includes('1200.0.90.0') && !imgUrl.includes('HB')) {
-          imageUrls.add(imgUrl);
-        }
+      const imgUrl = req.url();
+      if (
+        req.resourceType() === 'image' &&
+        imgUrl.includes('akimages.shoplocal.com') &&
+        imgUrl.includes('1200.0.90.0') &&
+        !imgUrl.includes('HB')
+      ) {
+        imageUrls.add(imgUrl);
       }
       route.continue();
     });
@@ -89,11 +84,21 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
 
     await browser.close();
 
+    const uploadedFiles = new Set();
+
     for (const url of imageUrls) {
       try {
+        const fileName = url.split('/').pop();
+        uploadedFiles.add(fileName);
+
         const imgRes = await fetch(url);
         const buffer = Buffer.from(await imgRes.arrayBuffer());
-        const fileName = url.split('/').pop();
+
+        // Aynı dosya zaten varsa ve boyutu da aynıysa tekrar yükleme
+        if (existingFiles.has(fileName) && existingFiles.get(fileName) === buffer.length) {
+          console.log(`⏭️ Atlandı (değişmedi): ${fileName}`);
+          continue;
+        }
 
         const key = `${fullPrefix}/${fileName}`;
         await s3Client.send(new PutObjectCommand({
@@ -106,6 +111,18 @@ async function scrapeAndUploadFromUrl(flyerUrl) {
         console.log(`🟢 Yüklendi: ${key}`);
       } catch (uploadError) {
         console.error(`🚫 Yükleme hatası: ${url}`, uploadError);
+      }
+    }
+
+    // 3. Artık olmayan eski dosyaları sil
+    for (const [fileName] of existingFiles) {
+      if (!uploadedFiles.has(fileName)) {
+        const deleteKey = `${fullPrefix}/${fileName}`;
+        await s3Client.send(new DeleteObjectCommand({
+          Bucket: process.env.CF_R2_BUCKET,
+          Key: deleteKey
+        }));
+        console.log(`🗑️ Silindi (artık yok): ${deleteKey}`);
       }
     }
 
